@@ -13,7 +13,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"encoding/json"
-	"io"
+	"net/rpc"
+	"net/http"
 )
 
 var (
@@ -23,114 +24,47 @@ var (
 	//RaftDirectory is the directory where raft files should be stored.
 	RaftDirectory = "."
 	
-	//RaftPort is the port we'll bind to for Raft communication.
-	RaftPort = "8080"
-	
 	//RetainSnapshotCount is the number of Raft snapsnots that will be retained.
 	RetainSnapshotCount = 2
 )
 
+type Config struct {
+	Peers []string
+	RaftConfig *raft.Config
+	RPCPort string
+	RaftBind string
+}
+
 type Callback func(interface{}, ...interface{})
-
-type methodCall struct {
-	Method string 
-	Args []interface{}
-}
-
-type fsm struct {
-	client *Client
-	underlying *T 
-}
-
-type fsmSnapshot struct {
-	store interface{}
-}
-
-func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
-		err := func() error {
-		// Encode data.
-		b, err := json.Marshal(f.store)
-		if err != nil {
-			return err
-		}
-
-		// Write data to sink.
-		if _, err := sink.Write(b); err != nil {
-			return err
-		}
-
-		// Close the sink.
-		if err := sink.Close(); err != nil {
-			return err
-		}
-
-		return nil
-	}()
-
-	if err != nil {
-		sink.Cancel()
-		return err
-	}
-	
-	return nil
-}
-
-func (f *fsmSnapshot) Release(){}
-
-func (f *fsm) Snapshot() (raft.FSMSnapshot, error){
-	f.underlying.Lock()
-	defer f.underlying.Unlock()
-	
-	data, err := f.underlying.Copy()
-	
-	if err != nil {
-		return nil, err
-	}
-	
-	return &fsmSnapshot{store: data}, nil
-	
-}
-
-func (f *fsm) Restore(rc io.ReadCloser) error {
-	e := f.underlying.reflectType.Elem()
-	o := reflect.New(e).Interface()
-	if err := json.NewDecoder(rc).Decode(&o); err != nil {
-		return err
-	}
-
-	// Set the state from the snapshot, no lock required according to
-	// Hashicorp docs.
-	f.underlying = f.client.Wrap(o)
-	return nil
-}
 
 //T is a wrapper for the datastructure you want to distribute. 
 //It inherics from sync/RWMutex and you should use RLock()/RUnlock() when calling read-only methods.
 type T struct {
 	sync.RWMutex
-	raftClient *Client
+	raftClient *client
 	value interface{}
 	fsm *fsm
+	client *client
 	callbacks map[string][]Callback
 	reflectVal reflect.Value
 	reflectType reflect.Type
 	methods map[string]reflect.Value
+	config *Config
 }
 
-type Client struct {
+type client struct {
 	ra *raft.Raft
 }
 
-// Listen starts the Raft protocol. You must call this before Apply'ing anything.
-func New(peers []string, config *raft.Config) (*Client, error){
-
+func (t *T) newClient(c *Config) (*client, error) {
+	var config *raft.Config
 	// Setup Raft configuration.
-	if config == nil {
+	if c.RaftConfig == nil {
 		config = raft.DefaultConfig()
 		
 		// Allow the node to entry single-mode, potentially electing itself, if
 		// explicitly enabled and there is only 1 node in the cluster already.
-		if len(peers) <= 1 {
+		if len(c.Peers) == 0 {
 			config.EnableSingleNode = true
 			config.DisableBootstrapAfterElect = false
 		}
@@ -139,11 +73,11 @@ func New(peers []string, config *raft.Config) (*Client, error){
 	
 
 	// Setup Raft communication.
-	addr, err := net.ResolveTCPAddr("tcp", RaftPort)
+	addr, err := net.ResolveTCPAddr("tcp", c.RaftBind)
 	if err != nil {
 		return nil, err
 	}
-	transport, err := raft.NewTCPTransport(RaftPort, addr, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(c.RaftBind, addr, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -165,20 +99,27 @@ func New(peers []string, config *raft.Config) (*Client, error){
 
 	// Instantiate the Raft systems.
 	//ra, err := raft.NewRaft(config, (*fsm)(s), logStore, logStore, snapshots, peerStore, transport)
-	
-	//TODO: Implement FSM interface
-	ra, err := raft.NewRaft(config,nil, logStore, logStore, snapshots, peerStore, transport)
+	ra, err := raft.NewRaft(config, t.fsm, logStore, logStore, snapshots, peerStore, transport)
 	if err != nil {
 		return nil, fmt.Errorf("new raft: %s", err)
 	}
-	var client Client
-	client.ra = ra
-	return &client, nil	
+	var ret client
+	ret.ra = ra
+	return &ret, nil	
 }
 
 
 //Wrap returns a wrapper for your type. Type methods should have JSON-marshallable arguments.
-func (c *Client) Wrap(i interface{}) *T{
+func Wrap(i interface{}, c *Config) (*T, error) {
+	
+	if c.RaftBind == "" {
+		c.RaftBind = "127.0.0.1:8080"
+	}
+	
+	if c.RPCPort == "" {
+		c.RPCPort = "8081"
+	}
+	
 	methods := make(map[string]reflect.Value)
 	t := reflect.TypeOf(i)
 	v := reflect.ValueOf(i)
@@ -187,24 +128,66 @@ func (c *Client) Wrap(i interface{}) *T{
 		methods[method.Name] = v.MethodByName(method.Name)
 	}
 	ret :=  T{
+		config: c,
 		value: i,
 		reflectVal: v,
 		reflectType: t,
 		methods: methods,
-		raftClient: c,
 		callbacks: make(map[string][]Callback),
 	}
 	
+	client, err := ret.newClient(c)
+	
+	if err != nil {
+		return nil, err
+	}
+	
 	ret.fsm = &fsm{
-		client: c,
+		client: client,
 		underlying: &ret,
 	}
 	
-	return &ret
+	ret.fsm.fsmRPC = &ForwardingClient{fsm: ret.fsm}
+	
+	ret.fsm.fsmRPC = new(ForwardingClient)
+	rpc.Register(ret.fsm.fsmRPC)
+	rpc.HandleHTTP()
+	l, err := net.Listen("tcp", ":" + c.RPCPort)
+
+	if err != nil {
+		return nil, err
+	}
+	go http.Serve(l, nil)
+	
+	return &ret, nil
+}
+
+func (t *T) mutateLeader(method string, args...interface{}) error {
+	leader := t.fsm.client.ra.Leader()
+	client, err := rpc.DialHTTP("tcp", leader + ":" + t.config.RPCPort)
+	if err != nil {
+		return err
+	}
+	
+	arg := Command{
+		Method: method,
+		Args: args,
+	}
+	var reply interface{}
+	
+	err = client.Call("Apply", arg, &reply)
+	
+	return err
+	
 }
 
 //Mutate performs an operation that mutates your data.
 func (t *T) Mutate(method string, args...interface{}) error{
+	
+	if t.fsm.client.ra.State() != raft.Leader { 
+		return t.mutateLeader(method, args)
+	}
+	
 	var (
 		m reflect.Value
 		found bool
@@ -237,16 +220,25 @@ func (t *T) Mutate(method string, args...interface{}) error{
 	
 }
 
-//When executes the `notify` func when the distributed object is mutated by applying `Mutate` on `method`.
+//Subscribe executes the `notify` func when the distributed object is mutated by applying `Mutate` on `method`.
 //The first parameter the notify func receives is the data structure and the variadic args are a copy 
 //of the arguments passed to Mutate.  
 //The func should not mutate the interface or strange things will happen.
-func (t *T) When(method string, notify Callback){
+func (t *T) Subscribe(method string, notify Callback){
 	t.callbacks[method] = append(t.callbacks[method], notify)
 }
 
+//Inspect gives f access to the distributed data. While f is executing, no goroutine may mutate 
+//the data. Multiple goroutines can call Inspect concurrently.
+//f should not mutate the value or strange things will happen.
+func (t *T) Inspect(f func(interface{})){
+	t.RLock()
+	defer t.RUnlock()
+	f(t.value)
+}
+
 //Copy returns a deep copy of the data contained in t. You should avoid using this often - 
-//it is better to use When() to react to data changes.
+//it is better to use When() to react to data changes or Peek() to inspect the data.
 func (t *T) Copy() (interface{}, error){
 	
 	val, err := json.Marshal(t.value)
