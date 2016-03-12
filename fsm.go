@@ -33,20 +33,25 @@ type Command struct {
 type JSONCommand []byte
 
 var ErrIncorrectType = errors.New("Snapshot contained data of an incorrect type")
+var ErrPanic = errors.New("Stuff is nil and I'm trying not to panic")
 
 type fsmSnapshot struct {
 	store interface{}
 }
 
 func (r *ForwardingClient) Apply(cmd JSONCommand, reply *interface{}) error {
+	if r.fsm == nil || r.fsm.client == nil {
+		return ErrPanic
+	}
 	if r.fsm.client.ra.State() != raft.Leader {
 		return ErrNotLeader
-	}	
+}	
 	
 	
 	if errF := r.fsm.client.ra.Apply(cmd, raftTimeout); errF != nil {
 		return errF.(error)
 	}
+	
 	return nil
 }
 
@@ -86,7 +91,7 @@ func (f *fsm) Snapshot() (raft.FSMSnapshot, error){
 	f.underlying.Lock()
 	defer f.underlying.Unlock()
 	
-	data, err := f.underlying.Copy()
+	data, err := json.Marshal(f.underlying)
 	
 	if err != nil {
 		return nil, err
@@ -117,14 +122,48 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 }
 
 func (f *fsm) Apply(l *raft.Log) interface{} {
-	var cmd Command
+		var (
+			cmd Command
+		m reflect.Value
+		found bool
+	)
 	if err := json.Unmarshal(l.Data, &cmd); err != nil {
 		panic(fmt.Sprintf("Could not unmarshal command: %s", err.Error()))
 	}
+
+	t := f.underlying
 	
-	if err := f.underlying.Mutate(cmd.Method, cmd.Args...); err != nil {
-		panic(fmt.Sprintf("Could not apply command %s: %s", cmd.Method, err.Error()))
+	if m, found  = t.methods[cmd.Method]; !found {
+		return ErrMethodNotFound
 	}
+	
+	var callArgs []reflect.Value
+	
+	for i := range cmd.Args {
+		callArgs = append(callArgs, reflect.ValueOf(cmd.Args[i]))
+	}
+	
+	t.Lock()
+	defer t.Unlock()
+
+	ret := m.Call(callArgs)
+	
+	for _, callback := range f.underlying.callbacks[cmd.Method]{
+		callback(f.underlying, cmd.Args...)
+	}
+	
+	
+	switch {
+		case len(ret) == 0:
+			return nil
+		case len(ret) > 1:
+			panic("Applied methods should have at most one return parameter, and it should satisfy error interface")
+		default:
+			//one return param, which should satisfy error interface 
+			return ret[0].Interface().(error)
+	}
+
+
 	
 	return nil	
 }

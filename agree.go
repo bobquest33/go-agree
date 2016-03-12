@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"encoding/json"
 	"net/rpc"
-	"net/http"
+	"net/rpc/jsonrpc"
 )
 
 var (
@@ -136,20 +136,23 @@ func Wrap(i interface{}, c *Config) (*T, error) {
 		callbacks: make(map[string][]Callback),
 	}
 	
+
+	
+	ret.fsm = &fsm{
+		config: c,
+		underlying: &ret,
+	}
+	
 	client, err := ret.newClient(c)
 	
 	if err != nil {
 		return nil, err
 	}
 	
-	ret.fsm = &fsm{
-		client: client,
-		underlying: &ret,
-	}
-	
+	ret.fsm.client = client
+
 	ret.fsm.fsmRPC = &ForwardingClient{fsm: ret.fsm}
 	
-	ret.fsm.fsmRPC = new(ForwardingClient)
 	rpc.Register(ret.fsm.fsmRPC)
 	rpc.HandleHTTP()
 	l, err := net.Listen("tcp", ":" + c.RPCPort)
@@ -157,14 +160,25 @@ func Wrap(i interface{}, c *Config) (*T, error) {
 	if err != nil {
 		return nil, err
 	}
-	go http.Serve(l, nil)
+	
+	go func(){
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				continue
+			}
+			go jsonrpc.ServeConn(c)
+		}
+		
+		
+	}()
 	
 	return &ret, nil
 }
 
 func (t *T) mutateLeader(method string, args...interface{}) error {
 	leader := t.fsm.client.ra.Leader()
-	client, err := rpc.DialHTTP("tcp", leader + ":" + t.config.RPCPort)
+	client, err := jsonrpc.Dial("tcp", leader + ":" + t.config.RPCPort)
 	if err != nil {
 		return err
 	}
@@ -173,9 +187,17 @@ func (t *T) mutateLeader(method string, args...interface{}) error {
 		Method: method,
 		Args: args,
 	}
+	
+	var b []byte
+	b, err = json.Marshal(arg)
+	
+	if err != nil {
+		return err
+	}
+
 	var reply interface{}
 	
-	err = client.Call("Apply", arg, &reply)
+	err = client.Call("ForwardingClient.Apply", b, &reply)
 	
 	return err
 	
@@ -188,35 +210,20 @@ func (t *T) Mutate(method string, args...interface{}) error{
 		return t.mutateLeader(method, args)
 	}
 	
-	var (
-		m reflect.Value
-		found bool
-	)
-	
-	if m, found  = t.methods[method]; !found {
-		return ErrMethodNotFound
+	var cmd = Command{
+		Method: method,
+		Args: args,
 	}
 	
-	var callArgs []reflect.Value
+	b, err := json.Marshal(cmd)
 	
-	for i := range args {
-		callArgs = append(callArgs, reflect.ValueOf(args[i]))
+	if err != nil {
+		return err
 	}
 	
-	t.Lock()
-	defer t.Unlock()
+	t.fsm.client.ra.Apply(b, raftTimeout)
 	
-	ret := m.Call(callArgs)
-	
-	switch {
-		case len(ret) == 0:
-			return nil
-		case len(ret) > 1:
-			panic("Applied methods should have at most one return parameter, and it should satisfy error interface")
-		default:
-			//one return param, which should satisfy error interface 
-			return ret[0].Interface().(error)
-	}
+	return nil
 	
 }
 
@@ -235,21 +242,4 @@ func (t *T) Inspect(f func(interface{})){
 	t.RLock()
 	defer t.RUnlock()
 	f(t.value)
-}
-
-//Copy returns a deep copy of the data contained in t. You should avoid using this often - 
-//it is better to use When() to react to data changes or Peek() to inspect the data.
-func (t *T) Copy() (interface{}, error){
-	
-	val, err := json.Marshal(t.value)
-	
-	if err != nil {
-		return nil, err
-	}
-	
-	var i interface{}
-
-	err = json.Unmarshal(val, &i)
-	
-	return i, err
 }

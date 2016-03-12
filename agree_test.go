@@ -2,7 +2,16 @@ package agree
 
 import (
 	"testing"
+	"time"
+	"os/exec"
+	"fmt"
 )
+
+func init(){
+	fmt.Println("Cleaning up previous Raft state...")
+	exec.Command("rm", "-rf", "snapshots/*")
+	exec.Command("rm", "raft.db")
+}
 
 type testStruct struct {
 	Value string
@@ -15,6 +24,8 @@ func (t *testStruct) Set(newValue string) {
 func TestSingleNode(t *testing.T){
 	s := &testStruct{}
 	wt, err := Wrap(s, &Config{})
+	
+	time.Sleep(time.Second*5)
 	var changed bool 
 	
 	if err != nil {
@@ -42,6 +53,8 @@ func TestSingleNode(t *testing.T){
 	
 	err = wt.Mutate("Set", "hello")
 	
+	time.Sleep(time.Second*3)
+	
 	if err != nil {
 		t.Fatalf("Failed to mutate: %s", err.Error())
 	}
@@ -51,30 +64,14 @@ func TestSingleNode(t *testing.T){
 	}
 	
 	wt.Inspect(func(val interface{}){
-		v, ok := val.(testStruct)
+		v, ok := val.(*testStruct)
 		
 		if !ok {
-			t.Fatal("Value of incorrect type")
+			t.Fatal("Value of incorrect type", val)
 		}
 		
 		if v.Value != "hello" {
 			t.Fatalf("Expected Value to be %s but got %s", "hello", v.Value)
 		}
 	})
-	
-	copiedVal, err := wt.Copy()
-	
-	if err != nil {
-		t.Fatalf("Error copying: %s", err.Error())
-	}
-	
-	copiedStruct, ok := copiedVal.(testStruct)
-	
-	if !ok {
-		t.Fatal("Copied value of incorrect type")
-	}
-	
-	if copiedStruct.Value != "hello" {
-		t.Fatalf("Expected copied struct to have Value %s but had value %s", "hello", copiedStruct.Value)
-	}
 }
