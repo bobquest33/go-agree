@@ -2,16 +2,14 @@
 
 Go-Agree is a proof-of-concept package that helps you create consistent replicated data structures using Raft. 
 
-For any JSON-marshallable interface you provide, it will create a finite state machine where invocations of the interface methods will become entries in the commit log. 
+For any JSON-marshallable interface you provide, Go-Agree will give you a wrapper to
 
-Go-Agree will 
-
-* apply commands (invoking the relevant methods on your interface through reflection)
+* apply commands that mutate the value of the interface (invoking the relevant methods on your interface through reflection)
 * create/restore snapshots (stored in BoltDB)
 * forward commands to the Raft leader (via JSON-RPC)
-* allow you to inspect the interface or subscribe to changes without worrying about synchronization
+* inspect the interface at any time or subscribe to mutations of its value 
 
-In the future it may also help you deal with partitioned data structures using (Blance)[https://github.com/couchbase/blance].
+In the future it may also help you deal with partitioned data structures, probably using [Blance](https://github.com/couchbase/blance).
 
 *This is at a proof-of-concept stage. It is poorly tested and needs refactoring. Breaking changes to the API may occur. Suggestions, bug reports and PRs welcome.*
 
@@ -124,11 +122,19 @@ If you subscribe via a channel, Go-agree doesn't know when you'll access the val
 
 ### Cluster Membership Changes
 
-To add a node to the cluster at run time, use `Join()`:
+To add a node to the cluster at run time, use `AddNode()`. The node should be ready to receive Raft commands at that address.
 
 ```go
-	err := w.Join("localhost:2345")
+	err := w.AddNode("localhost:2345")
 ```
+
+To remove a node from the cluster at run time, use `RemoveNode()`:
+
+```go
+	err := w.RemoveNode("localhost:2345")
+```
+
+
 
 ## Full Example (Key-value store)
 
@@ -161,11 +167,9 @@ func (k KVStore) Get(key string) (string, bool) {
 
 func main(){
 	
-	//Start single-node Raft
+	//Start single-node Raft. Will block until a leader is elected.
 	w, err := agree.Wrap(make(KVStore), &agree.Config{})
-	
-	time.sleep(time.Second*5) // Give Raft ample time to set itself up. Depending on your use case this may not be necessary.
-	
+
 	if err != nil {
 		fmt.Println("Error wrapping: ", err)
 		return

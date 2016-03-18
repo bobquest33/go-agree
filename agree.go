@@ -125,6 +125,11 @@ func (t *T) newClient(c *Config) (*client, error) {
 	}
 	var ret client
 	ret.ra = ra
+
+	//block until a leader is elected
+	for ra.Leader() == "" {
+		time.Sleep(time.Second)
+	}
 	return &ret, nil
 }
 
@@ -216,7 +221,38 @@ func (t *T) forwardCommandToLeader(method string, args ...interface{}) error {
 	err = client.Call("ForwardingClient.Apply", b, &reply)
 
 	return err
+}
 
+func (t *T) forwardAddNodeToLeader(addr string) error {
+	leader := t.fsm.client.ra.Leader()
+	client, err := jsonrpc.Dial("tcp", leader+":"+t.config.RPCPort)
+	if err != nil {
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	var reply struct{}
+
+	err = client.Call("ForwardingClient.AddNode", addr, &reply)
+
+	return err
+}
+
+func (t *T) forwardRemoveNodeToLeader(addr string) error {
+	leader := t.fsm.client.ra.Leader()
+	client, err := jsonrpc.Dial("tcp", leader+":"+t.config.RPCPort)
+	if err != nil {
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	var reply struct{}
+
+	err = client.Call("ForwardingClient.RemoveNode", addr, &reply)
+
+	return err
 }
 
 //Mutate performs an operation that mutates your data.
@@ -244,9 +280,26 @@ func (t *T) Mutate(method string, args ...interface{}) error {
 }
 
 //AddNode adds a node, located at addr, to the cluster. The node must be ready to respond to Raft 
-//commands at the address. 
+//commands at the address.
 func (t *T) AddNode(addr string) error {
+	if t.client.ra.State() != raft.Leader {
+		return t.forwardAddNodeToLeader(addr)
+	}
+	
 	f := t.client.ra.AddPeer(addr)
+	if f.Error() != nil {
+		return f.Error()
+	}
+	return nil
+}
+
+//RemoveNode removes a node, located at addr, from the cluster.
+func (t *T) RemoveNode(addr string) error {
+	if t.client.ra.State() != raft.Leader {
+		return t.forwardRemoveNodeToLeader(addr)
+	}
+	
+	f := t.client.ra.RemovePeer(addr)
 	if f.Error() != nil {
 		return f.Error()
 	}

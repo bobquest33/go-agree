@@ -36,7 +36,7 @@ type fsmSnapshot struct {
 	store interface{}
 }
 
-func (r *ForwardingClient) Apply(cmd []byte, reply *interface{}) error {
+func (r *ForwardingClient) Apply(cmd []byte, reply *struct{}) error {
 	if r.fsm.client.ra.State() != raft.Leader {
 		return ErrNotLeader
 	}
@@ -46,6 +46,20 @@ func (r *ForwardingClient) Apply(cmd []byte, reply *interface{}) error {
 	}
 
 	return nil
+}
+
+func (r *ForwardingClient) AddPeer(addr string, reply *struct{}) error {
+	if r.fsm.client.ra.State() != raft.Leader {
+		return ErrNotLeader
+	}
+	return r.fsm.underlying.AddNode(addr)
+} 
+
+func (r ForwardingClient) RemovePeer(addr string, reply *struct{}) error {
+	if r.fsm.client.ra.State() != raft.Leader {
+		return ErrNotLeader
+	}
+	return r.fsm.underlying.RemoveNode(addr)
 }
 
 func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
