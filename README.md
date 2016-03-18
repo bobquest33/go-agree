@@ -122,13 +122,13 @@ If you subscribe via a channel, Go-agree doesn't know when you'll access the val
 
 ### Cluster Membership Changes
 
-To add a node to the cluster at run time, use `AddNode()`. The node should be ready to receive Raft commands at that address.
+To add a node to the cluster after you have Wrap()'ed your interface, use `AddNode()`. The node should be ready to receive Raft commands at that address.
 
 ```go
 	err := w.AddNode("localhost:2345")
 ```
 
-To remove a node from the cluster at run time, use `RemoveNode()`:
+To remove a node from the cluster after you have Wrap()'ed your interface, use `RemoveNode()`:
 
 ```go
 	err := w.RemoveNode("localhost:2345")

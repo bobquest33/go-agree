@@ -25,18 +25,17 @@ func TestSingleNode(t *testing.T) {
 	s := &testStruct{}
 	wt, err := Wrap(s, &Config{})
 
-	time.Sleep(time.Second * 5)
 	var changed bool
 
 	if err != nil {
 		t.Fatalf("Failed to wrap: %s", err.Error())
 	}
 
-	notify := func(args CallbackArgs) {
-		if len(args) != 1 {
-			t.Fatalf("Wrong number of arguments: expected %d but got %d", 1, len(args))
+	notify := func(mutation Mutation) {
+		if len(mutation.MethodArgs) != 1 {
+			t.Fatalf("Wrong number of arguments: expected %d but got %d", 1, len(mutation.MethodArgs))
 		}
-		argVal, ok := args[0].(string)
+		argVal, ok := mutation.MethodArgs[0].(string)
 
 		if !ok {
 			t.Fatal("Arg had incorrect type")
@@ -49,7 +48,7 @@ func TestSingleNode(t *testing.T) {
 		changed = true
 	}
 
-	wt.Subscribe("Set", notify)
+	wt.SubscribeFunc("Set", notify)
 
 	err = wt.Mutate("Set", "hello")
 
