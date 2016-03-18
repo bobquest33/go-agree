@@ -1,8 +1,21 @@
 # Readme
 
-Agree is a package that helps you create consistent distributed data structures using Raft. 
+Go-Agree is a proof-of-concept package that helps you create consistent replicated data structures using Raft. 
 
-## Interface
+For any JSON-marshallable interface you provide, it will create a finite state machine where invocations of the interface methods will become entries in the commit log. 
+
+Go-Agree will 
+
+* apply commands (invoking the relevant methods on your interface through reflection)
+* create/restore snapshots (stored in BoltDB)
+* forward commands to the Raft leader (via JSON-RPC)
+* allow you to inspect the interface or subscribe to changes without worrying about synchronization
+
+In the future it may also help you deal with partitioned data structures using (Blance)[https://github.com/couchbase/blance].
+
+*This is at a proof-of-concept stage. It is poorly tested and needs refactoring. Breaking changes to the API may occur. Suggestions, bug reports and PRs welcome.*
+
+## API
 
 Everything starts from a type that you want to wrap and distribute. 
 
@@ -41,7 +54,7 @@ w, err := agree.Wrap(make(KVStore), &agree.Config{})
 Read the godoc for configuration options - they include things like addresses of other nodes in the cluster.
 
 
-### Mutations
+### Mutating the value
 
 Now you have a wrapper, we can either mutate it or observe mutations. We're basically creating a simple key-value store here, so let's set a value:
 
@@ -53,7 +66,9 @@ err := w.Mutate("Set", "key", "value")
 
 Go-agree knows that your type had a "Set" method and invokes it for you, dealing with things like figuring out who the leader of the cluster is and storing snapshots of your type's value in case bad things happen.
 
-**You should only mutate your value with the "Mutate" method**
+**You should only mutate your value with the "Mutate" method, not by calling your interface's methods directly**
+
+### Inspecting the value
 
 At any time you can inspect your type, that is, "read" it (without mutating it). Go-agree takes care of locking so you don't need to:
 
@@ -61,6 +76,21 @@ At any time you can inspect your type, that is, "read" it (without mutating it).
 w.Inspect(func(val interface{}){
 	fmt.Println(val.(KVStore))	
 })
+```
+
+If you retained a pointer to your interface before you wrapped it, you can also do something like this (just make sure to lock the wrapper when doing this):
+
+```go
+kv := make(KVStore)
+
+w, _ := agree.Wrap(KVStore, &agree.Config{})
+
+w.Mutate("Set", "key", "value")
+
+w.RLock()
+fmt.Println(kv["key"]) //prints "value"
+w.RUnlock()
+
 ```
 
 ### Observing Mutations
@@ -94,7 +124,11 @@ If you subscribe via a channel, Go-agree doesn't know when you'll access the val
 
 ### Cluster Membership Changes
 
-If nodes join or leave the cluster just call the `Join()` and `Leave()` methods.
+To add a node to the cluster at run time, use `Join()`:
+
+```go
+	err := w.Join("localhost:2345")
+```
 
 ## Full Example (Key-value store)
 
@@ -171,6 +205,8 @@ func main(){
 
 ```
 
+## How it works
 
+I'm using Hashicorp's Raft API as described in the excellent tutorial [here](https://github.com/otoolep/hraftd).
 
-
+Reflection is used to map commit log entries to method invocations and JSON-RPC to forward commands to the leader.

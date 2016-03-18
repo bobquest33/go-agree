@@ -243,6 +243,16 @@ func (t *T) Mutate(method string, args ...interface{}) error {
 
 }
 
+//AddNode adds a node, located at addr, to the cluster. The node must be ready to respond to Raft 
+//commands at the address. 
+func (t *T) AddNode(addr string) error {
+	f := t.client.ra.AddPeer(addr)
+	if f.Error() != nil {
+		return f.Error()
+	}
+	return nil
+}
+
 //SubscribeFunc executes the `notify` func when the distributed object is mutated by applying `Mutate` on `method`.
 //The first parameter the notify func receives is the data structure and the variadic args are a copy
 //of the arguments passed to Mutate.
