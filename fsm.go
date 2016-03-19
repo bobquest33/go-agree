@@ -31,7 +31,7 @@ type fsm struct {
 	fsmRPC     *ForwardingClient
 	config     *Config
 	raft       *raft.Raft
-	underlying *Wrapper
+	wrapper *Wrapper
 }
 
 //LogEntry represents a mutating command (log entry) in the Raft commit log.
@@ -62,7 +62,7 @@ func (r *ForwardingClient) AddPeer(addr string, reply *struct{}) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
-	return r.fsm.underlying.AddNode(addr)
+	return r.fsm.wrapper.AddNode(addr)
 }
 
 //RemovePeer accepts a forwarded request to remove a peer, sent to the Raft leader.
@@ -70,7 +70,7 @@ func (r ForwardingClient) RemovePeer(addr string, reply *struct{}) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
-	return r.fsm.underlying.RemoveNode(addr)
+	return r.fsm.wrapper.RemoveNode(addr)
 }
 
 func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
@@ -106,7 +106,7 @@ func (f *fsmSnapshot) Release() {}
 
 func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
 
-	data, err := f.underlying.Marshal()
+	data, err := f.wrapper.Marshal()
 
 	if err != nil {
 		return nil, err
@@ -118,21 +118,21 @@ func (f *fsm) Snapshot() (raft.FSMSnapshot, error) {
 
 func (f *fsm) Restore(rc io.ReadCloser) error {
 	var err error
-	e := f.underlying.reflectType.Elem()
+	e := f.wrapper.reflectType.Elem()
 	o := reflect.New(e).Interface()
 	if err := json.NewDecoder(rc).Decode(&o); err != nil {
 		return err
 	}
 
-	if !reflect.TypeOf(o).AssignableTo(f.underlying.reflectType) {
+	if !reflect.TypeOf(o).AssignableTo(f.wrapper.reflectType) {
 		return ErrIncorrectType
 	}
 
 	// Set the state from the snapshot, no lock required according to
 	// Hashicorp docs.
-	f.underlying.Lock()
-	f.underlying.value = o
-	f.underlying.Unlock()
+	f.wrapper.Lock()
+	f.wrapper.value = o
+	f.wrapper.Unlock()
 	return err
 }
 
@@ -146,7 +146,7 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 		panic(fmt.Sprintf("Could not unmarshal command: %s", err.Error()))
 	}
 
-	t := f.underlying
+	t := f.wrapper
 
 	if m, found = t.methods[cmd.Method]; !found {
 		return ErrMethodNotFound
@@ -163,19 +163,19 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 
 	ret := m.Call(callArgs)
 
-	for _, callback := range f.underlying.callbacks[cmd.Method] {
-		f.underlying.RLock()
+	for _, callback := range f.wrapper.callbacks[cmd.Method] {
+		f.wrapper.RLock()
 		callback(Mutation{
-			NewValue:   f.underlying.value,
+			NewValue:   f.wrapper.value,
 			Method:     cmd.Method,
 			MethodArgs: cmd.Args,
 		})
-		f.underlying.RUnlock()
+		f.wrapper.RUnlock()
 	}
 
-	for _, c := range f.underlying.callbackChans[cmd.Method] {
+	for _, c := range f.wrapper.callbackChans[cmd.Method] {
 		c <- &Mutation{
-			NewValue:   f.underlying.value,
+			NewValue:   f.wrapper.value,
 			Method:     cmd.Method,
 			MethodArgs: cmd.Args,
 		}
