@@ -51,14 +51,13 @@ type Mutation struct {
 
 type Callback func(args Mutation)
 
-//T is a wrapper for the datastructure you want to distribute.
+//Wrapper is a wrapper for the datastructure you want to distribute.
 //It inherics from sync/RWMutex and you should use RLock()/RUnlock() when calling read-only methods.
-type T struct {
+type Wrapper struct {
 	sync.RWMutex
-	raftClient    *client
+	raftClient    *raft.Raft
 	value         interface{}
 	fsm           *fsm
-	client        *client
 	callbacks     map[string][]Callback
 	callbackChans map[string][]chan *Mutation
 	reflectVal    reflect.Value
@@ -67,17 +66,13 @@ type T struct {
 	config        *Config
 }
 
-type client struct {
-	ra *raft.Raft
-}
-
-func (t *T) Marshal() ([]byte, error) {
+func (t *Wrapper) Marshal() ([]byte, error) {
 	t.RLock()
 	defer t.RUnlock()
 	return json.Marshal(t.value)
 }
 
-func (t *T) newClient(c *Config) (*client, error) {
+func (t *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	var config *raft.Config
 	// Setup Raft configuration.
 	if c.RaftConfig == nil {
@@ -123,18 +118,16 @@ func (t *T) newClient(c *Config) (*client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new raft: %s", err)
 	}
-	var ret client
-	ret.ra = ra
 
 	//block until a leader is elected
 	for ra.Leader() == "" {
 		time.Sleep(time.Second)
 	}
-	return &ret, nil
+	return ra, nil
 }
 
 //Wrap returns a wrapper for your type. Type methods should have JSON-marshallable arguments.
-func Wrap(i interface{}, c *Config) (*T, error) {
+func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 	if c.RaftBind == "" {
 		c.RaftBind = "127.0.0.1:8080"
@@ -151,7 +144,7 @@ func Wrap(i interface{}, c *Config) (*T, error) {
 		method := t.Method(j)
 		methods[method.Name] = v.MethodByName(method.Name)
 	}
-	ret := T{
+	ret := Wrapper{
 		config:      c,
 		value:       i,
 		reflectVal:  v,
@@ -165,13 +158,13 @@ func Wrap(i interface{}, c *Config) (*T, error) {
 		underlying: &ret,
 	}
 
-	client, err := ret.newClient(c)
+	r, err := ret.startRaft(c)
 
 	if err != nil {
 		return nil, err
 	}
 
-	ret.fsm.client = client
+	ret.fsm.raft = r
 
 	ret.fsm.fsmRPC = &ForwardingClient{fsm: ret.fsm}
 
@@ -197,14 +190,14 @@ func Wrap(i interface{}, c *Config) (*T, error) {
 	return &ret, nil
 }
 
-func (t *T) forwardCommandToLeader(method string, args ...interface{}) error {
-	leader := t.fsm.client.ra.Leader()
+func (t *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
+	leader := t.fsm.raft.Leader()
 	client, err := jsonrpc.Dial("tcp", leader+":"+t.config.RPCPort)
 	if err != nil {
 		return err
 	}
 
-	arg := Command{
+	arg := LogEntry{
 		Method: method,
 		Args:   args,
 	}
@@ -223,8 +216,8 @@ func (t *T) forwardCommandToLeader(method string, args ...interface{}) error {
 	return err
 }
 
-func (t *T) forwardAddNodeToLeader(addr string) error {
-	leader := t.fsm.client.ra.Leader()
+func (t *Wrapper) forwardAddNodeToLeader(addr string) error {
+	leader := t.fsm.raft.Leader()
 	client, err := jsonrpc.Dial("tcp", leader+":"+t.config.RPCPort)
 	if err != nil {
 		return err
@@ -239,8 +232,8 @@ func (t *T) forwardAddNodeToLeader(addr string) error {
 	return err
 }
 
-func (t *T) forwardRemoveNodeToLeader(addr string) error {
-	leader := t.fsm.client.ra.Leader()
+func (t *Wrapper) forwardRemoveNodeToLeader(addr string) error {
+	leader := t.fsm.raft.Leader()
 	client, err := jsonrpc.Dial("tcp", leader+":"+t.config.RPCPort)
 	if err != nil {
 		return err
@@ -256,13 +249,13 @@ func (t *T) forwardRemoveNodeToLeader(addr string) error {
 }
 
 //Mutate performs an operation that mutates your data.
-func (t *T) Mutate(method string, args ...interface{}) error {
+func (t *Wrapper) Mutate(method string, args ...interface{}) error {
 
-	if t.fsm.client.ra.State() != raft.Leader {
+	if t.fsm.raft.State() != raft.Leader {
 		return t.forwardCommandToLeader(method, args)
 	}
 
-	var cmd = Command{
+	var cmd = LogEntry{
 		Method: method,
 		Args:   args,
 	}
@@ -273,20 +266,20 @@ func (t *T) Mutate(method string, args ...interface{}) error {
 		return err
 	}
 
-	t.fsm.client.ra.Apply(b, raftTimeout)
+	t.fsm.raft.Apply(b, raftTimeout)
 
 	return nil
 
 }
 
-//AddNode adds a node, located at addr, to the cluster. The node must be ready to respond to Raft 
+//AddNode adds a node, located at addr, to the cluster. The node must be ready to respond to Raft
 //commands at the address.
-func (t *T) AddNode(addr string) error {
-	if t.client.ra.State() != raft.Leader {
+func (t *Wrapper) AddNode(addr string) error {
+	if t.fsm.raft.State() != raft.Leader {
 		return t.forwardAddNodeToLeader(addr)
 	}
-	
-	f := t.client.ra.AddPeer(addr)
+
+	f := t.fsm.raft.AddPeer(addr)
 	if f.Error() != nil {
 		return f.Error()
 	}
@@ -294,12 +287,12 @@ func (t *T) AddNode(addr string) error {
 }
 
 //RemoveNode removes a node, located at addr, from the cluster.
-func (t *T) RemoveNode(addr string) error {
-	if t.client.ra.State() != raft.Leader {
+func (t *Wrapper) RemoveNode(addr string) error {
+	if t.fsm.raft.State() != raft.Leader {
 		return t.forwardRemoveNodeToLeader(addr)
 	}
-	
-	f := t.client.ra.RemovePeer(addr)
+
+	f := t.fsm.raft.RemovePeer(addr)
 	if f.Error() != nil {
 		return f.Error()
 	}
@@ -310,7 +303,7 @@ func (t *T) RemoveNode(addr string) error {
 //The first parameter the notify func receives is the data structure and the variadic args are a copy
 //of the arguments passed to Mutate.
 //The func should not mutate the interface or strange things will happen.
-func (t *T) SubscribeFunc(method string, notify Callback) {
+func (t *Wrapper) SubscribeFunc(method string, notify Callback) {
 	t.callbacks[method] = append(t.callbacks[method], notify)
 }
 
@@ -319,14 +312,14 @@ func (t *T) SubscribeFunc(method string, notify Callback) {
 //arguments passed to the method. For example, calling Mutate("method", "arg1" ,"arg2") will result
 //in a 3-element slice being passed to the channel - the first will be the wrapped interface{},
 //and the second and third elements will be "arg1" and "arg2", respectively.
-func (t *T) SubscribeChan(method string, c chan *Mutation) {
+func (t *Wrapper) SubscribeChan(method string, c chan *Mutation) {
 	t.callbackChans[method] = append(t.callbackChans[method], c)
 }
 
 //Inspect gives f access to the distributed data. While f is executing, no goroutine may mutate
 //the data. Multiple goroutines can call Inspect concurrently.
 //f should not mutate the value or strange things will happen.
-func (t *T) Inspect(f func(interface{})) {
+func (t *Wrapper) Inspect(f func(interface{})) {
 	t.RLock()
 	defer t.RUnlock()
 	f(t.value)

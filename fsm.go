@@ -10,10 +10,19 @@ import (
 	"time"
 )
 
-var ErrNotLeader = errors.New("Commands should be sent to leader and cannot be sent to followers")
+var (
+	//ErrNotLeader is returned when a command is mistakenly sent to a follower. You should never receive this as Go-Agree takes care of following commands to the leader.
+	ErrNotLeader = errors.New("Commands should be sent to leader and cannot be sent to followers")
+
+	//ErrIncorrectType is returned when a Raft snapshot cannot be unmarshalled to the expected type.  
+	ErrIncorrectType = errors.New("Snapshot contained data of an incorrect type")
+)
+
 
 const raftTimeout = time.Second * 10
 
+//ForwardingClient is a client that forwards commands to the Raft leader. Should not be used,
+//the only reason it is exported is because the rpc package requires it.
 type ForwardingClient struct {
 	fsm *fsm
 }
@@ -21,42 +30,44 @@ type ForwardingClient struct {
 type fsm struct {
 	fsmRPC     *ForwardingClient
 	config     *Config
-	client     *client
-	underlying *T
+	raft       *raft.Raft
+	underlying *Wrapper
 }
 
-type Command struct {
+//LogEntry represents a mutating command (log entry) in the Raft commit log.
+type LogEntry struct {
 	Method string
 	Args   []interface{}
 }
-
-var ErrIncorrectType = errors.New("Snapshot contained data of an incorrect type")
 
 type fsmSnapshot struct {
 	store interface{}
 }
 
+//Apply forwards the given mutating command to the Raft leader.
 func (r *ForwardingClient) Apply(cmd []byte, reply *struct{}) error {
-	if r.fsm.client.ra.State() != raft.Leader {
+	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
 
-	if errF := r.fsm.client.ra.Apply(cmd, raftTimeout); errF != nil {
+	if errF := r.fsm.raft.Apply(cmd, raftTimeout); errF != nil {
 		return errF.(error)
 	}
 
 	return nil
 }
 
+//AddPeer accepts a forwarded request to add a peer, sent to the Raft leader.
 func (r *ForwardingClient) AddPeer(addr string, reply *struct{}) error {
-	if r.fsm.client.ra.State() != raft.Leader {
+	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
 	return r.fsm.underlying.AddNode(addr)
-} 
+}
 
+//RemovePeer accepts a forwarded request to remove a peer, sent to the Raft leader.
 func (r ForwardingClient) RemovePeer(addr string, reply *struct{}) error {
-	if r.fsm.client.ra.State() != raft.Leader {
+	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
 	return r.fsm.underlying.RemoveNode(addr)
@@ -127,7 +138,7 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 
 func (f *fsm) Apply(l *raft.Log) interface{} {
 	var (
-		cmd   Command
+		cmd   LogEntry
 		m     reflect.Value
 		found bool
 	)
