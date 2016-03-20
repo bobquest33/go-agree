@@ -44,9 +44,9 @@ func (k KVStore) Get(key string) (string, bool) {
 	return k[key]  // Note: no locking necessary
 }
 
+```
 *The arguments of your methods must not be ints. This is a temporary limitation (see [Issue 1](https://github.com/michaelbironneau/go-agree/issues/1))*
 
-```
 
 ## Step 2: Wrap your type
 
