@@ -14,10 +14,9 @@ var (
 	//ErrNotLeader is returned when a command is mistakenly sent to a follower. You should never receive this as Go-Agree takes care of following commands to the leader.
 	ErrNotLeader = errors.New("Commands should be sent to leader and cannot be sent to followers")
 
-	//ErrIncorrectType is returned when a Raft snapshot cannot be unmarshalled to the expected type.  
+	//ErrIncorrectType is returned when a Raft snapshot cannot be unmarshalled to the expected type.
 	ErrIncorrectType = errors.New("Snapshot contained data of an incorrect type")
 )
-
 
 const raftTimeout = time.Second * 10
 
@@ -28,14 +27,14 @@ type ForwardingClient struct {
 }
 
 type fsm struct {
-	fsmRPC     *ForwardingClient
-	config     *Config
-	raft       *raft.Raft
+	fsmRPC  *ForwardingClient
+	config  *Config
+	raft    *raft.Raft
 	wrapper *Wrapper
 }
 
-//LogEntry represents a mutating command (log entry) in the Raft commit log.
-type LogEntry struct {
+//logEntry represents a mutating command (log entry) in the Raft commit log.
+type logEntry struct {
 	Method string
 	Args   []interface{}
 }
@@ -138,7 +137,7 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 
 func (f *fsm) Apply(l *raft.Log) interface{} {
 	var (
-		cmd   LogEntry
+		cmd   logEntry
 		m     reflect.Value
 		found bool
 	)
@@ -157,9 +156,6 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 	for i := range cmd.Args {
 		callArgs = append(callArgs, reflect.ValueOf(cmd.Args[i]))
 	}
-
-	t.Lock()
-	defer t.Unlock()
 
 	ret := m.Call(callArgs)
 

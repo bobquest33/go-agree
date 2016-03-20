@@ -34,11 +34,12 @@ type agreeable interface {
 	Marshal() ([]byte, error)
 }
 
+//Config is a configuration struct that is passed to Wrap(). It specifies Raft settings and command forwarding port.
 type Config struct {
-	Peers      []string
-	RaftConfig *raft.Config
-	RPCPort    string
-	RaftBind   string
+	Peers          []string     // Raft peers, default empty
+	RaftConfig     *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
+	ForwardingBind string       // Where to bind forwarding client, default ":8181"
+	RaftBind       string       // Where to bind Raft, default ":8080"
 }
 
 //Mutation is passed to observers to notify them of mutations. Observers should not
@@ -49,10 +50,14 @@ type Mutation struct {
 	MethodArgs []interface{} // The arguments the method was called with
 }
 
-type Callback func(args Mutation)
+//Callback is a callback function that is invoked when you subscribe to mutations using Wrapper.SusbcribeFunc() and a mutation occurs. 
+//The args contain the details of the mutation that just occurred.
+type Callback func(m Mutation)
 
 //Wrapper is a wrapper for the datastructure you want to distribute.
-//It inherics from sync/RWMutex and you should use RLock()/RUnlock() when calling read-only methods.
+//It inherics from sync/RWMutex and if you retained a pointer to the interface before you passed it to 
+//Wrap(), you should RLock()/RUnlock() the wrapper whenever you access the interface's value outside Go-Agree's helper
+//methods.
 type Wrapper struct {
 	sync.RWMutex
 	value         interface{}
@@ -65,7 +70,7 @@ type Wrapper struct {
 	config        *Config
 }
 
-//Marshal marshals the wrapper's value using encoding/json. 
+//Marshal marshals the wrapper's value using encoding/json.
 func (w *Wrapper) Marshal() ([]byte, error) {
 	w.RLock()
 	defer w.RUnlock()
@@ -128,11 +133,11 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 	if c.RaftBind == "" {
-		c.RaftBind = "127.0.0.1:8080"
+		c.RaftBind = ":8080"
 	}
 
-	if c.RPCPort == "" {
-		c.RPCPort = "8081"
+	if c.ForwardingBind == "" {
+		c.ForwardingBind = ":8081"
 	}
 
 	methods := make(map[string]reflect.Value)
@@ -152,7 +157,7 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 	}
 
 	ret.fsm = &fsm{
-		config:     c,
+		config:  c,
 		wrapper: &ret,
 	}
 
@@ -168,7 +173,7 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 	rpc.Register(ret.fsm.fsmRPC)
 	rpc.HandleHTTP()
-	l, err := net.Listen("tcp", ":"+c.RPCPort)
+	l, err := net.Listen("tcp", c.ForwardingBind)
 
 	if err != nil {
 		return nil, err
@@ -190,12 +195,12 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
 	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.RPCPort)
+	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
 	if err != nil {
 		return err
 	}
 
-	arg := LogEntry{
+	arg := logEntry{
 		Method: method,
 		Args:   args,
 	}
@@ -216,7 +221,7 @@ func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) err
 
 func (w *Wrapper) forwardAddNodeToLeader(addr string) error {
 	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.RPCPort)
+	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
 	if err != nil {
 		return err
 	}
@@ -232,7 +237,7 @@ func (w *Wrapper) forwardAddNodeToLeader(addr string) error {
 
 func (w *Wrapper) forwardRemoveNodeToLeader(addr string) error {
 	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.RPCPort)
+	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
 	if err != nil {
 		return err
 	}
@@ -253,7 +258,7 @@ func (w *Wrapper) Mutate(method string, args ...interface{}) error {
 		return w.forwardCommandToLeader(method, args)
 	}
 
-	var cmd = LogEntry{
+	var cmd = logEntry{
 		Method: method,
 		Args:   args,
 	}
@@ -297,19 +302,14 @@ func (w *Wrapper) RemoveNode(addr string) error {
 	return nil
 }
 
-//SubscribeFunc executes the `notify` func when the distributed object is mutated by applying `Mutate` on `method`.
-//The first parameter the notify func receives is the data structure and the variadic args are a copy
-//of the arguments passed to Mutate.
-//The func should not mutate the interface or strange things will happen.
-func (w *Wrapper) SubscribeFunc(method string, notify Callback) {
-	w.callbacks[method] = append(w.callbacks[method], notify)
+//SubscribeFunc executes the `Callback` func when the distributed object is mutated by applying `Mutate` on `method`.
+//The callback should not mutate the interface or strange things will happen.
+func (w *Wrapper) SubscribeFunc(method string, f Callback) {
+	w.callbacks[method] = append(w.callbacks[method], f)
 }
 
-//SubscribeChan sends values to the returned channel when the underlying structure is mutated. The
-//values are a slice of interface{}: the first entry is the structure and the next entries are the
-//arguments passed to the method. For example, calling Mutate("method", "arg1" ,"arg2") will result
-//in a 3-element slice being passed to the channel - the first will be the wrapped interface{},
-//and the second and third elements will be "arg1" and "arg2", respectively.
+//SubscribeChan sends values to the returned channel when the underlying structure is mutated.
+//The callback should not mutate the interface or strange things will happen.
 func (w *Wrapper) SubscribeChan(method string, c chan *Mutation) {
 	w.callbackChans[method] = append(w.callbackChans[method], c)
 }
