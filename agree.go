@@ -50,12 +50,12 @@ type Mutation struct {
 	MethodArgs []interface{} // The arguments the method was called with
 }
 
-//Callback is a callback function that is invoked when you subscribe to mutations using Wrapper.SusbcribeFunc() and a mutation occurs. 
+//Callback is a callback function that is invoked when you subscribe to mutations using Wrapper.SusbcribeFunc() and a mutation occurs.
 //The args contain the details of the mutation that just occurred.
 type Callback func(m Mutation)
 
 //Wrapper is a wrapper for the datastructure you want to distribute.
-//It inherics from sync/RWMutex and if you retained a pointer to the interface before you passed it to 
+//It inherics from sync/RWMutex and if you retained a pointer to the interface before you passed it to
 //Wrap(), you should RLock()/RUnlock() the wrapper whenever you access the interface's value outside Go-Agree's helper
 //methods.
 type Wrapper struct {

@@ -187,5 +187,4 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 		return ret[0].Interface().(error)
 	}
 
-	return nil
 }
