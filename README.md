@@ -1,5 +1,9 @@
 # Readme
 
+[![Go Report Card](https:///badge/github.com/michaelbironneau/go-agree)](https:///report/github.com/michaelbironneau/go-agree)
+
+[Link to Godoc](https://godoc.org/github.com/michaelbironneau/go-agree)
+
 Go-Agree is a proof-of-concept package that helps you create consistent replicated data structures using Raft. 
 
 For any JSON-marshallable interface you provide, Go-Agree will give you a wrapper to
