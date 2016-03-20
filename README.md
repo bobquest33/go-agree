@@ -1,6 +1,7 @@
 # Readme
 
 [![Go Report Card](http://goreportcard.com/badge/github.com/michaelbironneau/go-agree)](https://goreportcard.com/report/github.com/michaelbironneau/go-agree)
+[![Build Status](https://travis-ci.org/michaelbironneau/go-agree.svg?branch=master)](https://travis-ci.org/michaelbironneau/go-agree/)
 
 [Link to Godoc](https://godoc.org/github.com/michaelbironneau/go-agree)
 
