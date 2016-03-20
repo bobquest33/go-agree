@@ -2,17 +2,20 @@
 package agree
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-boltdb"
+	"io/ioutil"
 	"net"
 	"net/rpc"
 	"net/rpc/jsonrpc"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -30,12 +33,12 @@ var (
 
 //Config is a configuration struct that is passed to Wrap(). It specifies Raft settings and command forwarding port.
 type Config struct {
-	Peers          []string     // Raft peers, default empty
-	RaftConfig     *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
-	ForwardingBind string       // Where to bind forwarding client, default ":8181"
-	RaftBind       string       // Where to bind Raft, default ":8080"
-	RaftDirectory string 		// Where Raft files will be stored 
-	RetainSnapshotCount int 	// How many Raft snapshots to retain
+	Peers               []string     // List of peers. Peers' raft ports can be different but the forwarding port must be the same for each peer in the cluster.
+	RaftConfig          *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
+	ForwardingBind      string       // Where to bind forwarding client, default ":8181"
+	RaftBind            string       // Where to bind Raft, default ":8080"
+	RaftDirectory       string       // Where Raft files will be stored
+	RetainSnapshotCount int          // How many Raft snapshots to retain
 }
 
 //Mutation is passed to observers to notify them of mutations. Observers should not
@@ -75,13 +78,27 @@ func (w *Wrapper) Marshal() ([]byte, error) {
 
 func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	var config *raft.Config
+
+	if c.RaftDirectory == "" {
+		c.RaftDirectory = DefaultRaftDirectory
+	}
+
+	if c.RetainSnapshotCount == 0 {
+		c.RetainSnapshotCount = DefaultRetainSnapshotCount
+	}
+
+	// Check for any existing peers.
+	peers, err := readPeersJSON(filepath.Join(c.RaftDirectory, "peers.json"))
+	if err != nil {
+		return nil, err
+	}
 	// Setup Raft configuration.
 	if c.RaftConfig == nil {
 		config = raft.DefaultConfig()
 
 		// Allow the node to entry single-mode, potentially electing itself, if
 		// explicitly enabled and there is only 1 node in the cluster already.
-		if len(c.Peers) == 0 {
+		if len(peers) == 0 && len(c.Peers) == 0 {
 			config.EnableSingleNode = true
 			config.DisableBootstrapAfterElect = false
 		}
@@ -97,17 +114,15 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	if err != nil {
 		return nil, err
 	}
-	
-	if c.RaftDirectory == "" {
-		c.RaftDirectory = DefaultRaftDirectory
-	}
-	
-	if c.RetainSnapshotCount == 0 {
-		c.RetainSnapshotCount = DefaultRetainSnapshotCount
-	}
 
 	// Create peer storage.
 	peerStore := raft.NewJSONPeers(c.RaftDirectory, transport)
+
+	if len(c.Peers) > 0 {
+		if err := peerStore.SetPeers(c.Peers); err != nil {
+			return nil, fmt.Errorf("error setting peers: %s", err)
+		}
+	}
 
 	// Create the snapshot store. This allows the Raft to truncate the log.
 	snapshots, err := raft.NewFileSnapshotStore(c.RaftDirectory, c.RetainSnapshotCount, os.Stderr)
@@ -197,20 +212,13 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 	return &ret, nil
 }
 
-func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
+func (w *Wrapper) forwardToLeader(rpcMethod string, request interface{}) error {
 	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
+	leaderForwardingAddr, err := incrementPort(leader, 1)
 	if err != nil {
 		return err
 	}
-
-	arg := command{
-		Method: method,
-		Args:   args,
-	}
-
-	var b []byte
-	b, err = json.Marshal(arg)
+	client, err := jsonrpc.Dial("tcp", leaderForwardingAddr)
 
 	if err != nil {
 		return err
@@ -218,41 +226,34 @@ func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) err
 
 	var reply interface{}
 
-	err = client.Call("ForwardingClient.Apply", b, &reply)
+	err = client.Call(rpcMethod, request, &reply)
 
 	return err
+}
+
+func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
+	arg := command{
+		Method: method,
+		Args:   args,
+	}
+
+	var b []byte
+
+	b, err := json.Marshal(arg)
+
+	if err != nil {
+		return err
+	}
+
+	return w.forwardToLeader("ForwardingClient.Apply", b)
 }
 
 func (w *Wrapper) forwardAddNodeToLeader(addr string) error {
-	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
-	if err != nil {
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	var reply struct{}
-
-	err = client.Call("ForwardingClient.AddNode", addr, &reply)
-
-	return err
+	return w.forwardToLeader("ForwardingClient.AddNode", addr)
 }
 
 func (w *Wrapper) forwardRemoveNodeToLeader(addr string) error {
-	leader := w.fsm.raft.Leader()
-	client, err := jsonrpc.Dial("tcp", leader+":"+w.config.ForwardingBind)
-	if err != nil {
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	var reply struct{}
-
-	err = client.Call("ForwardingClient.RemoveNode", addr, &reply)
-
-	return err
+	return w.forwardToLeader("ForwardingClient.RemoveNode", addr)
 }
 
 //Mutate performs an operation that mutates your data.
@@ -325,4 +326,48 @@ func (w *Wrapper) Inspect(f func(interface{})) {
 	w.RLock()
 	defer w.RUnlock()
 	f(w.value)
+}
+
+func readPeersJSON(path string) ([]string, error) {
+	b, err := ioutil.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+
+	if len(b) == 0 {
+		return nil, nil
+	}
+
+	var peers []string
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&peers); err != nil {
+		return nil, err
+	}
+
+	return peers, nil
+}
+
+//parses host:port string and increments port by incr.
+func incrementPort(addr string, incr int) (string, error) {
+	var (
+		portStr string
+		host    string
+		port    int
+		err     error
+	)
+	host, portStr, err = net.SplitHostPort(addr)
+
+	if err != nil {
+		return "", err
+	}
+
+	port, err = strconv.Atoi(portStr)
+
+	if err != nil {
+		return "", err
+	}
+
+	port += incr
+
+	return host + ":" + strconv.Itoa(port), nil
 }

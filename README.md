@@ -1,4 +1,4 @@
-# Readme
+# Go Agree
 
 [![Go Report Card](http://goreportcard.com/badge/github.com/michaelbironneau/go-agree)](https://goreportcard.com/report/github.com/michaelbironneau/go-agree)
 [![Build Status](https://travis-ci.org/michaelbironneau/go-agree.svg?branch=master)](https://travis-ci.org/michaelbironneau/go-agree/)
@@ -20,9 +20,11 @@ In the future it may also help you deal with partitioned data structures, probab
 
 *This is at a proof-of-concept stage. Breaking changes to the API may occur. Suggestions, bug reports and PRs welcome.*
 
-## API
+# Tutorial
 
-Everything starts from a type that you want to wrap and distribute. 
+## Step 1: Code up the data structure that you want to distribute
+
+Here we're going to create a very simple key-value store.
 
 ```go
 
@@ -44,7 +46,9 @@ func (k KVStore) Get(key string) (string, bool) {
 
 ```
 
-Say you want to replicate a key-value store via Raft. You have the type, you've defined its methods, and they pass your unit tests.
+You have the type, you've defined its methods, and (let's say) they pass your unit tests.
+
+## Step 2: Wrap your type
 
 Now you want a simple way to turn this into a distributed type that consistently replicates changes to all participating nodes in your cluster.
 
@@ -56,8 +60,9 @@ w, err := agree.Wrap(make(KVStore), &agree.Config{})
 
 ```
 
-Read the godoc for configuration options - they include things like addresses of other nodes in the cluster.
+Read the godoc for configuration options - they include things like addresses of other nodes in the cluster and Raft configuration.
 
+## Step 3: Making mutations and observing the result 
 
 ### Mutating the value
 
