@@ -153,7 +153,7 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 	ret.fsm = &fsm{
 		config:     c,
-		underlying: &ret,
+		wrapper: &ret,
 	}
 
 	r, err := ret.startRaft(c)
