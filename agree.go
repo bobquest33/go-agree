@@ -21,18 +21,12 @@ var (
 	//ErrMethodNotFound is the error that is returned if you try to apply a method that the type does not have.
 	ErrMethodNotFound = errors.New("Cannot apply the method as it was not found")
 
-	//RaftDirectory is the directory where raft files should be stored.
-	RaftDirectory = "."
+	//DefaultRaftDirectory is the default directory where raft files should be stored.
+	DefaultRaftDirectory = "."
 
-	//RetainSnapshotCount is the number of Raft snapsnots that will be retained.
-	RetainSnapshotCount = 2
+	//DefaultRetainSnapshotCount is the number of Raft snapsnots that will be retained.
+	DefaultRetainSnapshotCount = 2
 )
-
-type agreeable interface {
-	Mutate(method string, args ...interface{}) error
-	Set(interface{}) error
-	Marshal() ([]byte, error)
-}
 
 //Config is a configuration struct that is passed to Wrap(). It specifies Raft settings and command forwarding port.
 type Config struct {
@@ -40,6 +34,8 @@ type Config struct {
 	RaftConfig     *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
 	ForwardingBind string       // Where to bind forwarding client, default ":8181"
 	RaftBind       string       // Where to bind Raft, default ":8080"
+	RaftDirectory string 		// Where Raft files will be stored 
+	RetainSnapshotCount int 	// How many Raft snapshots to retain
 }
 
 //Mutation is passed to observers to notify them of mutations. Observers should not
@@ -101,18 +97,26 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	if c.RaftDirectory == "" {
+		c.RaftDirectory = DefaultRaftDirectory
+	}
+	
+	if c.RetainSnapshotCount == 0 {
+		c.RetainSnapshotCount = DefaultRetainSnapshotCount
+	}
 
 	// Create peer storage.
-	peerStore := raft.NewJSONPeers(RaftDirectory, transport)
+	peerStore := raft.NewJSONPeers(c.RaftDirectory, transport)
 
 	// Create the snapshot store. This allows the Raft to truncate the log.
-	snapshots, err := raft.NewFileSnapshotStore(RaftDirectory, RetainSnapshotCount, os.Stderr)
+	snapshots, err := raft.NewFileSnapshotStore(c.RaftDirectory, c.RetainSnapshotCount, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("file snapshot store: %s", err)
 	}
 
 	// Create the log store and stable store.
-	logStore, err := raftboltdb.NewBoltStore(filepath.Join(RaftDirectory, "raft.db"))
+	logStore, err := raftboltdb.NewBoltStore(filepath.Join(c.RaftDirectory, "raft.db"))
 	if err != nil {
 		return nil, fmt.Errorf("new bolt store: %s", err)
 	}
@@ -200,7 +204,7 @@ func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) err
 		return err
 	}
 
-	arg := logEntry{
+	arg := command{
 		Method: method,
 		Args:   args,
 	}
@@ -258,7 +262,7 @@ func (w *Wrapper) Mutate(method string, args ...interface{}) error {
 		return w.forwardCommandToLeader(method, args)
 	}
 
-	var cmd = logEntry{
+	var cmd = command{
 		Method: method,
 		Args:   args,
 	}

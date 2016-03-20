@@ -33,8 +33,8 @@ type fsm struct {
 	wrapper *Wrapper
 }
 
-//logEntry represents a mutating command (log entry) in the Raft commit log.
-type logEntry struct {
+//command represents a mutating command (log entry) in the Raft commit log.
+type command struct {
 	Method string
 	Args   []interface{}
 }
@@ -137,7 +137,7 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 
 func (f *fsm) Apply(l *raft.Log) interface{} {
 	var (
-		cmd   logEntry
+		cmd   command
 		m     reflect.Value
 		found bool
 	)

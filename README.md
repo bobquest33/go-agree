@@ -2,8 +2,10 @@
 
 [![Go Report Card](http://goreportcard.com/badge/github.com/michaelbironneau/go-agree)](https://goreportcard.com/report/github.com/michaelbironneau/go-agree)
 [![Build Status](https://travis-ci.org/michaelbironneau/go-agree.svg?branch=master)](https://travis-ci.org/michaelbironneau/go-agree/)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/michaelbironneau/go-agree/master/LICENSE.md)
 
-[Link to Godoc](https://godoc.org/github.com/michaelbironneau/go-agree)
+
+[Godoc](https://godoc.org/github.com/michaelbironneau/go-agree)
 
 Go-Agree is a proof-of-concept package that helps you create consistent replicated data structures using Raft. 
 
@@ -16,7 +18,7 @@ For any JSON-marshallable interface you provide, Go-Agree will give you a wrappe
 
 In the future it may also help you deal with partitioned data structures, probably using [Blance](https://github.com/couchbase/blance).
 
-*This is at a proof-of-concept stage. It is poorly tested and needs refactoring. Breaking changes to the API may occur. Suggestions, bug reports and PRs welcome.*
+*This is at a proof-of-concept stage. Breaking changes to the API may occur. Suggestions, bug reports and PRs welcome.*
 
 ## API
 
