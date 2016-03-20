@@ -1,6 +1,6 @@
 # Readme
 
-[![Go Report Card](http://goreportcard.com/badge/github.com/michaelbironneau/go-agree)](https://goreportcard.com/badgereport/github.com/michaelbironneau/go-agree)
+[![Go Report Card](http://goreportcard.com/badge/github.com/michaelbironneau/go-agree)](https://goreportcard.com/report/github.com/michaelbironneau/go-agree)
 
 [Link to Godoc](https://godoc.org/github.com/michaelbironneau/go-agree)
 
