@@ -146,7 +146,6 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 	}
 
 	t := f.wrapper
-
 	if m, found = t.methods[cmd.Method]; !found {
 		return ErrMethodNotFound
 	}
@@ -157,16 +156,16 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 		callArgs = append(callArgs, reflect.ValueOf(cmd.Args[i]))
 	}
 
+	f.wrapper.Lock()
+	defer f.wrapper.Unlock()
 	ret := m.Call(callArgs)
 
 	for _, callback := range f.wrapper.callbacks[cmd.Method] {
-		f.wrapper.RLock()
 		callback(Mutation{
 			NewValue:   f.wrapper.value,
 			Method:     cmd.Method,
 			MethodArgs: cmd.Args,
 		})
-		f.wrapper.RUnlock()
 	}
 
 	for _, c := range f.wrapper.callbackChans[cmd.Method] {

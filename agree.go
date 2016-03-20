@@ -35,7 +35,7 @@ var (
 type Config struct {
 	Peers               []string     // List of peers. Peers' raft ports can be different but the forwarding port must be the same for each peer in the cluster.
 	RaftConfig          *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
-	ForwardingBind      string       // Where to bind forwarding client, default ":8181"
+	forwardingBind      string       //Where forwarding client binds. Hardcoded to raft port + 1 for now.
 	RaftBind            string       // Where to bind Raft, default ":8080"
 	RaftDirectory       string       // Where Raft files will be stored
 	RetainSnapshotCount int          // How many Raft snapshots to retain
@@ -98,7 +98,7 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 
 		// Allow the node to entry single-mode, potentially electing itself, if
 		// explicitly enabled and there is only 1 node in the cluster already.
-		if len(peers) == 0 && len(c.Peers) == 0 {
+		if len(peers) <= 1 && len(c.Peers) == 0 {
 			config.EnableSingleNode = true
 			config.DisableBootstrapAfterElect = false
 		}
@@ -155,9 +155,11 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 		c.RaftBind = ":8080"
 	}
 
-	if c.ForwardingBind == "" {
-		c.ForwardingBind = ":8081"
+	forwardingAddr, err := incrementPort(c.RaftBind, 1)
+	if err != nil {
+		return nil, err
 	}
+	c.forwardingBind = forwardingAddr
 
 	methods := make(map[string]reflect.Value)
 	t := reflect.TypeOf(i)
@@ -192,7 +194,7 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 
 	rpc.Register(ret.fsm.fsmRPC)
 	rpc.HandleHTTP()
-	l, err := net.Listen("tcp", c.ForwardingBind)
+	l, err := net.Listen("tcp", c.forwardingBind)
 
 	if err != nil {
 		return nil, err
@@ -274,7 +276,15 @@ func (w *Wrapper) Mutate(method string, args ...interface{}) error {
 		return err
 	}
 
-	w.fsm.raft.Apply(b, raftTimeout)
+	f := w.fsm.raft.Apply(b, raftTimeout)
+
+	if f.Error() != nil {
+		return f.Error()
+	}
+
+	if f.Response() != nil && f.Response().(error) != nil {
+		return f.Response().(error)
+	}
 
 	return nil
 
