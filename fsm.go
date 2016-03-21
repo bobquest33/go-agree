@@ -49,8 +49,8 @@ func (r *ForwardingClient) Apply(cmd []byte, reply *struct{}) error {
 		return ErrNotLeader
 	}
 
-	if errF := r.fsm.raft.Apply(cmd, raftTimeout); errF != nil {
-		return errF.(error)
+	if errF := r.fsm.raft.Apply(cmd, raftTimeout); errF.Error() != nil {
+		return errF.Error()
 	}
 
 	return nil
@@ -149,6 +149,7 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 	if m, found = t.methods[cmd.Method]; !found {
 		return ErrMethodNotFound
 	}
+	fmt.Println(cmd)
 
 	var callArgs []reflect.Value
 
