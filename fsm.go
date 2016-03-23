@@ -149,7 +149,7 @@ func (f *fsm) Apply(l *raft.Log) interface{} {
 	if m, found = t.methods[cmd.Method]; !found {
 		return ErrMethodNotFound
 	}
-	fmt.Println(cmd)
+	//fmt.Println(cmd)
 
 	var callArgs []reflect.Value
 

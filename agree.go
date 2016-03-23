@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,13 +83,14 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	if c.RaftDirectory == "" {
 		c.RaftDirectory = DefaultRaftDirectory
 	}
-
+	subdir := strings.Replace(w.reflectType.String(), "*", "", 2)
+	raftDirectory := filepath.Join(c.RaftDirectory, subdir)
 	if c.RetainSnapshotCount == 0 {
 		c.RetainSnapshotCount = DefaultRetainSnapshotCount
 	}
 
 	// Check for any existing peers.
-	peers, err := readPeersJSON(filepath.Join(c.RaftDirectory, "peers.json"))
+	peers, err := readPeersJSON(filepath.Join(raftDirectory, "peers.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +118,7 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	}
 
 	// Create peer storage.
-	peerStore := raft.NewJSONPeers(c.RaftDirectory, transport)
+	peerStore := raft.NewJSONPeers(raftDirectory, transport)
 
 	if len(c.Peers) > 0 {
 		if err := peerStore.SetPeers(c.Peers); err != nil {
@@ -125,7 +127,7 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	}
 
 	// Create the snapshot store. This allows the Raft to truncate the log.
-	snapshots, err := raft.NewFileSnapshotStore(c.RaftDirectory, c.RetainSnapshotCount, os.Stderr)
+	snapshots, err := raft.NewFileSnapshotStore(raftDirectory, c.RetainSnapshotCount, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("file snapshot store: %s", err)
 	}
