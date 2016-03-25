@@ -224,4 +224,4 @@ func main(){
 
 I'm using Hashicorp's Raft API as described in the excellent tutorial [here](https://github.com/otoolep/hraftd).
 
-Reflection is used to map commit log entries to method invocations and JSON-RPC to forward commands to the leader.
+Reflection is used to map commit log entries to method invocations and net/rpc to forward commands to the leader.
