@@ -10,8 +10,8 @@ import (
 	"github.com/hashicorp/raft-boltdb"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"net/rpc"
-	"net/rpc/jsonrpc"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -84,6 +84,12 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 		c.RaftDirectory = DefaultRaftDirectory
 	}
 	subdir := strings.Replace(w.reflectType.String(), "*", "", 2)
+	
+	if err := os.Mkdir(subdir, os.ModePerm); err != nil && !strings.Contains(err.Error(), "file exists") {
+		return nil, err
+	}
+	
+	
 	raftDirectory := filepath.Join(c.RaftDirectory, subdir)
 	if c.RetainSnapshotCount == 0 {
 		c.RetainSnapshotCount = DefaultRetainSnapshotCount
@@ -133,7 +139,7 @@ func (w *Wrapper) startRaft(c *Config) (*raft.Raft, error) {
 	}
 
 	// Create the log store and stable store.
-	logStore, err := raftboltdb.NewBoltStore(filepath.Join(c.RaftDirectory, "raft.db"))
+	logStore, err := raftboltdb.NewBoltStore(filepath.Join(raftDirectory, "raft.db"))
 	if err != nil {
 		return nil, fmt.Errorf("new bolt store: %s", err)
 	}
@@ -202,16 +208,7 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 		return nil, err
 	}
 
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				continue
-			}
-			go jsonrpc.ServeConn(c)
-		}
-
-	}()
+	go http.Serve(l, nil)
 
 	return &ret, nil
 }
@@ -222,13 +219,13 @@ func (w *Wrapper) forwardToLeader(rpcMethod string, request interface{}) error {
 	if err != nil {
 		return err
 	}
-	client, err := jsonrpc.Dial("tcp", leaderForwardingAddr)
-
+	client, err := rpc.DialHTTP("tcp", leaderForwardingAddr)
+	
 	if err != nil {
 		return err
 	}
 
-	var reply interface{}
+	var reply int
 
 	err = client.Call(rpcMethod, request, &reply)
 
@@ -236,7 +233,7 @@ func (w *Wrapper) forwardToLeader(rpcMethod string, request interface{}) error {
 }
 
 func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
-	arg := command{
+	arg := Command{
 		Method: method,
 		Args:   args,
 	}
@@ -264,10 +261,10 @@ func (w *Wrapper) forwardRemoveNodeToLeader(addr string) error {
 func (w *Wrapper) Mutate(method string, args ...interface{}) error {
 
 	if w.fsm.raft.State() != raft.Leader {
-		return w.forwardCommandToLeader(method, args)
+		return w.forwardCommandToLeader(method, args...)
 	}
 
-	var cmd = command{
+	var cmd = Command{
 		Method: method,
 		Args:   args,
 	}

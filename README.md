@@ -47,7 +47,6 @@ func (k KVStore) Get(key string) (string, bool) {
 ```
 *The arguments of your methods must not be ints. This is a temporary limitation (see [Issue 1](https://github.com/michaelbironneau/go-agree/issues/1))*
 
-
 ## Step 2: Wrap your type
 
 Now you want a simple way to turn this into a distributed type that consistently replicates changes to all participating nodes in your cluster.

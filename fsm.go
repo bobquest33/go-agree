@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	//ErrNotLeader is returned when a command is mistakenly sent to a follower. You should never receive this as Go-Agree takes care of following commands to the leader.
+	//ErrNotLeader is returned when a Command is mistakenly sent to a follower. You should never receive this as Go-Agree takes care of following commands to the leader.
 	ErrNotLeader = errors.New("Commands should be sent to leader and cannot be sent to followers")
 
 	//ErrIncorrectType is returned when a Raft snapshot cannot be unmarshalled to the expected type.
@@ -33,8 +33,8 @@ type fsm struct {
 	wrapper *Wrapper
 }
 
-//command represents a mutating command (log entry) in the Raft commit log.
-type command struct {
+//Command represents a mutating Command (log entry) in the Raft commit log.
+type Command struct {
 	Method string
 	Args   []interface{}
 }
@@ -43,8 +43,8 @@ type fsmSnapshot struct {
 	store interface{}
 }
 
-//Apply forwards the given mutating command to the Raft leader.
-func (r *ForwardingClient) Apply(cmd []byte, reply *struct{}) error {
+//Apply forwards the given mutating Command to the Raft leader.
+func (r *ForwardingClient) Apply(cmd []byte, reply *int) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
@@ -57,7 +57,7 @@ func (r *ForwardingClient) Apply(cmd []byte, reply *struct{}) error {
 }
 
 //AddPeer accepts a forwarded request to add a peer, sent to the Raft leader.
-func (r *ForwardingClient) AddPeer(addr string, reply *struct{}) error {
+func (r *ForwardingClient) AddPeer(addr string, reply *int) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
@@ -65,7 +65,7 @@ func (r *ForwardingClient) AddPeer(addr string, reply *struct{}) error {
 }
 
 //RemovePeer accepts a forwarded request to remove a peer, sent to the Raft leader.
-func (r ForwardingClient) RemovePeer(addr string, reply *struct{}) error {
+func (r ForwardingClient) RemovePeer(addr string, reply *int) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
@@ -137,12 +137,12 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 
 func (f *fsm) Apply(l *raft.Log) interface{} {
 	var (
-		cmd   command
+		cmd   Command
 		m     reflect.Value
 		found bool
 	)
 	if err := json.Unmarshal(l.Data, &cmd); err != nil {
-		panic(fmt.Sprintf("Could not unmarshal command: %s", err.Error()))
+		panic(fmt.Sprintf("Could not unmarshal Command: %s", err.Error()))
 	}
 
 	t := f.wrapper
