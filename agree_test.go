@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"testing"
-	"time"
+	//"time"
 )
 
 func init() {
@@ -52,7 +52,7 @@ func TestSingleNode(t *testing.T) {
 
 	err = wt.Mutate("Set", "hello")
 
-	time.Sleep(time.Second * 3)
+	//time.Sleep(time.Second * 3)
 
 	if err != nil {
 		t.Fatalf("Failed to mutate: %s", err.Error())
@@ -73,4 +73,5 @@ func TestSingleNode(t *testing.T) {
 			t.Fatalf("Expected Value to be %s but got %s", "hello", v.Value)
 		}
 	})
+	
 }

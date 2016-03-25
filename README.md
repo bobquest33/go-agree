@@ -9,11 +9,11 @@
 
 Go-Agree is a proof-of-concept package that helps you create consistent replicated data structures using Raft. 
 
-For any JSON-marshallable interface you provide, Go-Agree will give you a wrapper to
+For any Gob-marshallable interface you provide (with Gob-marshallable method args), Go-Agree will give you a wrapper to
 
 * apply commands that mutate the value of the interface (invoking the relevant methods on your interface through reflection)
 * create/restore snapshots (stored in BoltDB)
-* forward commands to the Raft leader (via JSON-RPC)
+* forward commands to the Raft leader (via net/rpc)
 * inspect the interface at any time or subscribe to mutations of its value 
 
 In the future it may also help you deal with partitioned data structures, probably using [Blance](https://github.com/couchbase/blance).
