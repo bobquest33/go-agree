@@ -209,9 +209,11 @@ func main(){
 	
 	for {
 		mutation := <-c
-		c.RLock() // If subscribing via channel, make sure to RLock()/RUnlock() the wrapper.
-		fmt.Println("KV store changed: ", mutation)
-		c.RUnlock()
+		w.RLock() // If subscribing via channel, make sure to RLock()/RUnlock() the wrapper if you access NewValue field.
+		fmt.Println("New value: ", mutation.NewValue)
+		w.RUnlock()
+		fmt.Println("It was mutated by calling ", mutation.Method)
+		fmt.Println("...which was invoked with args ", mutation.MethodArgs)
 	}
 			
 }
