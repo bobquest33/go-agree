@@ -221,6 +221,15 @@ func main(){
 
 ```
 
+## Limitations and Caveats
+
+There are a few things you should know:
+
+* The interface{} you Wrap() should be Gob-marshallable *and* JSON-marshallable. All of its methods should have Gob-marshallable and JSON-marshallable arguments.
+* You can Wrap() multiple interface{}s. However, cannot currently Wrap() multiple interfaces *of the same type*. If you attempt this the second Wrap() call will probably block. You can work around it by aliasing the two types `type T2 T1`.
+* Go-Agree listens on two ports *per wrapped interface*: the Raft port (default 8080 - you can override it) and the command forwarding port (=Raft port + 1). 
+
+
 ## How it works
 
 I'm using Hashicorp's Raft API as described in the excellent tutorial [here](https://github.com/otoolep/hraftd).
