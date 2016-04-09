@@ -32,11 +32,25 @@ var (
 	DefaultRetainSnapshotCount = 2
 )
 
+//ConsistencyLevel describes how consistent we want our reads to be
+type ConsistencyLevel int
+
+const (
+	//Any means that stale reads are allowed
+	Any ConsistencyLevel = iota
+	 
+	//Leader means that there is a short window of inconsistency but requires no network round trip to verify leadership  
+	Leader ConsistencyLevel = iota 
+	
+	//Consistent means a linearizable read. It requires a network round trip on every read.
+	Consistent ConsistencyLevel = iota	
+)
+
 //Config is a configuration struct that is passed to Wrap(). It specifies Raft settings and command forwarding port.
 type Config struct {
 	Peers               []string     // List of peers. Peers' raft ports can be different but the forwarding port must be the same for each peer in the cluster.
 	RaftConfig          *raft.Config // Raft configuration, see github.com/hashicorp/raft. Default raft.DefaultConfig()
-	forwardingBind      string       //Where forwarding client binds. Hardcoded to raft port + 1 for now.
+	forwardingBind      string       // Where forwarding client binds. Hardcoded to raft port + 1 for now.
 	RaftBind            string       // Where to bind Raft, default ":8080"
 	RaftDirectory       string       // Where Raft files will be stored
 	RetainSnapshotCount int          // How many Raft snapshots to retain
@@ -213,23 +227,23 @@ func Wrap(i interface{}, c *Config) (*Wrapper, error) {
 	return &ret, nil
 }
 
-func (w *Wrapper) forwardToLeader(rpcMethod string, request interface{}) error {
+func (w *Wrapper) forwardToLeader(rpcMethod string, request interface{}) (interface{}, error) {
 	leader := w.fsm.raft.Leader()
 	leaderForwardingAddr, err := incrementPort(leader, 1)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	client, err := rpc.DialHTTP("tcp", leaderForwardingAddr)
 	
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	var reply int
+	var reply interface{}
 
 	err = client.Call(rpcMethod, request, &reply)
 
-	return err
+	return reply, err
 }
 
 func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) error {
@@ -246,15 +260,36 @@ func (w *Wrapper) forwardCommandToLeader(method string, args ...interface{}) err
 		return err
 	}
 
-	return w.forwardToLeader("ForwardingClient.Apply", b)
+	_, err = w.forwardToLeader("ForwardingClient.Apply", b)
+	
+	return err
+}
+
+func (w *Wrapper) forwardReadToLeader(method string, args ...interface{}) (interface{}, error) {
+	arg := Command{
+		Method: method,
+		Args:   args,
+	}
+
+	var b []byte
+
+	b, err := json.Marshal(arg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return w.forwardToLeader("ForwardingClient.Read", b)
 }
 
 func (w *Wrapper) forwardAddNodeToLeader(addr string) error {
-	return w.forwardToLeader("ForwardingClient.AddNode", addr)
+	_, err := w.forwardToLeader("ForwardingClient.AddNode", addr)
+	return err
 }
 
 func (w *Wrapper) forwardRemoveNodeToLeader(addr string) error {
-	return w.forwardToLeader("ForwardingClient.RemoveNode", addr)
+	_, err := w.forwardToLeader("ForwardingClient.RemoveNode", addr)
+	return err
 }
 
 //Mutate performs an operation that mutates your data.
@@ -262,6 +297,10 @@ func (w *Wrapper) Mutate(method string, args ...interface{}) error {
 
 	if w.fsm.raft.State() != raft.Leader {
 		return w.forwardCommandToLeader(method, args...)
+	}
+	
+	if err := w.fsm.raft.VerifyLeader().Error(); err != nil {
+		return err
 	}
 
 	var cmd = Command{
@@ -328,13 +367,29 @@ func (w *Wrapper) SubscribeChan(method string, c chan *Mutation) {
 	w.callbackChans[method] = append(w.callbackChans[method], c)
 }
 
-//Inspect gives f access to the distributed data. While f is executing, no goroutine may mutate
-//the data. Multiple goroutines can call Inspect concurrently.
-//f should not mutate the value or strange things will happen.
-func (w *Wrapper) Inspect(f func(interface{})) {
-	w.RLock()
-	defer w.RUnlock()
-	f(w.value)
+//Read invokes the specified method on the wrapped interface, at the given consistency level. 
+//The invoked method should return a single value or a single value followed by an error.
+//The method should **not** mutate the value of the wrapper as this mutation is not committed 
+//to the Raft log. To mutate the value use Mutate() instead. 
+func (w *Wrapper) Read(method string, c ConsistencyLevel, args...interface{}) (interface{}, error) {
+	if c == Any {
+		return w.fsm.Read(method, args...)
+	}
+	
+	if w.fsm.raft.State() != raft.Leader {
+		return w.forwardReadToLeader(method, args)  //TODO: implement interface return
+	}
+	
+	if c == Leader {
+		return w.fsm.Read(method, args...)
+	}
+	
+	//linearizable consistency required - must check we are still leader 
+	if err := w.fsm.raft.VerifyLeader().Error(); err != nil {
+		return nil, err
+	}
+	
+	return w.fsm.Read(method, args...)	
 }
 
 func readPeersJSON(path string) ([]string, error) {

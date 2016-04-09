@@ -76,15 +76,26 @@ Go-agree knows that your type had a "Set" method and invokes it for you, dealing
 
 **You should only mutate your value with the "Mutate" method, not by calling your interface's methods directly**
 
-### Inspecting the value
+### Reading the value
 
-At any time you can inspect your type, that is, "read" it (without mutating it). Go-agree takes care of locking so you don't need to:
+At any time you can read the value, that is, invoke non-mutating methods on your interface. Go-agree takes care of locking and forwarding the read to the Raft leader so you don't need to.
+
+There are three supported consistency levels for this:
+
+* `Any`: Will invoke the method on the local node's copy of the value, which may be stale
+* `Leader`: Will invoke the method on the local node if it thinks it is a leader, but will not check this (so there is a small window of inconsistency)
+* `Consistent`: Linearizable. Will check to ensure that the node that thinks it is a leader is still a leader and will return an error if not (in that case you should retry).
 
 ```go
-w.Inspect(func(val interface{}){
-	fmt.Println(val.(KVStore))	
-})
+val, err := w.Read("Get", agree.Consistent, "key")
+if err == nil {
+	fmt.Println(len(val.(string)))
+} else {
+	fmt.Println("Error: ", err)	
+}
 ```
+
+*Your method must either return one value or two values (of which the second must be of Error type).*
 
 If you retained a pointer to your interface before you wrapped it, you can also do something like this (just make sure to lock the wrapper when doing this):
 
@@ -100,6 +111,8 @@ fmt.Println(kv["key"]) //prints "value"
 w.RUnlock()
 
 ```
+
+Please note that if you do this then you may be reading stale data.
 
 ### Observing Mutations
 
@@ -189,11 +202,9 @@ func main(){
 	w.Mutate("Set", "key", "value")
 	w.Mutate("Set", "key2", "value2")
 	
-	//Get some values back. No locking necessary.
-	w.Inspect(func(val interface{}){
-		k := val.(KVStore)
-		fmt.Println(k.Get("key2"))	
-	})
+	//Get some values back with 'Any' consistency level.
+	v,_ := w.Read("Get", agree.Any, "key2")
+	fmt.Println(v)
 	
 	//Subscribe to mutations via channel.
 	c := make(chan agree.Mutation, 3)

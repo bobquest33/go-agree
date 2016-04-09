@@ -16,6 +16,9 @@ var (
 
 	//ErrIncorrectType is returned when a Raft snapshot cannot be unmarshalled to the expected type.
 	ErrIncorrectType = errors.New("Snapshot contained data of an incorrect type")
+	
+	//ErrTooManyalues is returned when a Read() method returns more than one value (plus optional error return)
+	ErrTooManyalues = errors.New("Method returned too many values")
 )
 
 const raftTimeout = time.Second * 10
@@ -133,6 +136,48 @@ func (f *fsm) Restore(rc io.ReadCloser) error {
 	f.wrapper.value = o
 	f.wrapper.Unlock()
 	return err
+}
+
+func (f *fsm) Read(method string, args...interface{}) (interface{}, error){
+
+	t := f.wrapper
+	var (
+		m reflect.Value
+		found bool 
+	)
+	if m, found = t.methods[method]; !found {
+		return nil, ErrMethodNotFound
+	}
+	//fmt.Println(cmd)
+
+	var callArgs []reflect.Value
+
+	for i := range args {
+		callArgs = append(callArgs, reflect.ValueOf(args[i]))
+	}
+
+	f.wrapper.Lock()
+	defer f.wrapper.Unlock()
+	ret := m.Call(callArgs)
+	
+	switch len(ret){
+		case 0:
+			return nil, nil 
+		case 1:
+			return ret[0].Interface(), nil
+		case 2:
+			if err, ok := ret[1].Interface().(error); ok {
+				return ret[0].Interface(), err 
+			} else if !ok {
+				return nil, errors.New("If returning two values the second value should be of error type")
+			}
+		default:
+			return nil, ErrTooManyalues
+	}
+
+	//unreachable	
+	return nil, nil
+
 }
 
 func (f *fsm) Apply(l *raft.Log) interface{} {

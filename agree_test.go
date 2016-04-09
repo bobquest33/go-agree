@@ -21,6 +21,10 @@ func (t *testStruct) Set(newValue string) {
 	t.Value = newValue
 }
 
+func (t *testStruct) Get() string {
+	return t.Value
+}
+
 func TestSingleNode(t *testing.T) {
 	s := &testStruct{}
 	wt, err := Wrap(s, &Config{})
@@ -62,16 +66,16 @@ func TestSingleNode(t *testing.T) {
 		t.Fatal("Callback did not get called")
 	}
 
-	wt.Inspect(func(val interface{}) {
-		v, ok := val.(*testStruct)
-
-		if !ok {
-			t.Fatal("Value of incorrect type", val)
-		}
-
-		if v.Value != "hello" {
-			t.Fatalf("Expected Value to be %s but got %s", "hello", v.Value)
-		}
-	})
+	if v, err := wt.Read("Get", Any); err != nil {
+		t.Fatalf("Received unexpected error %v", v)
+	} else if v.(string) != "hello" {
+		t.Fatalf("Expected %s, received %s", "hello", v.(string))
+	}
+	
+	if v, err := wt.Read("Get", Consistent); err != nil {
+		t.Fatalf("Received unexpected error %v", v)
+	} else if v.(string) != "hello" {
+		t.Fatalf("Expected %s, received %s", "hello", v.(string))
+	}
 	
 }
