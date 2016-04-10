@@ -38,6 +38,7 @@ type fsm struct {
 
 //Command represents a mutating Command (log entry) in the Raft commit log.
 type Command struct {
+	ConsistencyLevel int
 	Method string
 	Args   []interface{}
 }
@@ -51,12 +52,43 @@ func (r *ForwardingClient) Apply(cmd []byte, reply *int) error {
 	if r.fsm.raft.State() != raft.Leader {
 		return ErrNotLeader
 	}
+	
+	if r.fsm.raft.VerifyLeader().Error() != nil {
+		return ErrNotLeader
+	}
 
 	if errF := r.fsm.raft.Apply(cmd, raftTimeout); errF.Error() != nil {
 		return errF.Error()
 	}
 
 	return nil
+}
+
+//Read forwards the given read to the Raft leader.
+func (r *ForwardingClient) Read(cmd []byte, reply interface{}) error {
+	
+	var (
+		c Command 
+		err error 
+	)
+	
+	if err := json.Unmarshal(cmd, &c); err != nil {
+		return err
+	}
+	
+	if c.ConsistencyLevel == int(Leader) && r.fsm.raft.State() != raft.Leader {
+		return ErrNotLeader
+	}
+	
+	if c.ConsistencyLevel == int(Consistent) && r.fsm.raft.VerifyLeader().Error() != nil {
+		return ErrNotLeader
+	}
+
+	reply, err = r.fsm.Read(c.Method, c.Args...)
+	
+	reply = r 
+	
+	return err
 }
 
 //AddPeer accepts a forwarded request to add a peer, sent to the Raft leader.
